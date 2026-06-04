@@ -39,6 +39,7 @@
         <nav>
           <button class="nav active" data-view="chat">聊天</button>
           <button class="nav" data-view="friends">好友</button>
+          <button class="nav" data-view="groups">群聊</button>
           <button class="nav" data-view="moments">空间</button>
           <button class="nav" data-view="games">游戏</button>
         </nav>
@@ -55,13 +56,6 @@
         </header>
 
         <section class="view chat-view" id="chatView">
-          <div class="admin-audit hidden" id="adminAudit">
-            <div class="chat-head">
-              <strong>消息状态</strong>
-              <span></span>
-            </div>
-            <div class="audit-list" id="auditList"></div>
-          </div>
           <div class="chat-head">
             <strong id="chatTarget">未选择好友</strong>
             <span id="chatNote">在线对话</span>
@@ -72,6 +66,31 @@
             <label class="file-btn">图片<input id="messageImage" type="file" accept="image/*" hidden></label>
             <button class="primary" type="submit">发送</button>
           </form>
+        </section>
+
+        <section class="view hidden" id="groupsView">
+          <div class="tools-row">
+            <input id="groupName" placeholder="群聊名称">
+            <button class="primary" id="createGroupBtn">建群</button>
+          </div>
+          <div class="two-col">
+            <div>
+              <h3>我的群聊</h3>
+              <div class="list" id="groupList"></div>
+            </div>
+            <div>
+              <div class="chat-head">
+                <strong id="groupTarget">未选择群聊</strong>
+                <span>群消息</span>
+              </div>
+              <div class="messages" id="groupMessages"></div>
+              <form class="composer" id="groupMessageForm">
+                <input id="groupMessageInput" placeholder="输入群消息" maxlength="1000">
+                <label class="file-btn">图片<input id="groupMessageImage" type="file" accept="image/*" hidden></label>
+                <button class="primary" type="submit">发送</button>
+              </form>
+            </div>
+          </div>
         </section>
 
         <section class="view hidden" id="friendsView">
@@ -110,6 +129,7 @@
             <select id="roomType">
               <option value="drawguess">你画我猜</option>
               <option value="bombcat">炸弹猫</option>
+              <option value="jumpchain">跳一跳接龙</option>
             </select>
             <button class="primary" id="createRoomBtn">开房</button>
           </div>

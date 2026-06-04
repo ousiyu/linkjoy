@@ -8,11 +8,15 @@ const state = {
   incoming: [],
   outgoing: [],
   selectedFriend: null,
+  selectedGroup: null,
   messages: [],
+  groups: [],
+  groupMessages: [],
   rooms: [],
   room: null,
   ws: null,
-  authMode: "login"
+  authMode: "login",
+  brushColor: "#17202a"
 };
 
 function toast(text) {
@@ -85,6 +89,8 @@ function bindEvents() {
   $("#searchBtn").addEventListener("click", searchUsers);
   $("#searchInput").addEventListener("keydown", e => { if (e.key === "Enter") searchUsers(); });
   $("#messageForm").addEventListener("submit", sendMessage);
+  $("#createGroupBtn").addEventListener("click", createGroup);
+  $("#groupMessageForm").addEventListener("submit", sendGroupMessage);
   $("#momentForm").addEventListener("submit", publishMoment);
   $("#createRoomBtn").addEventListener("click", createRoom);
 }
@@ -96,6 +102,7 @@ function enterApp(data) {
   connectWs();
   refreshMe();
   loadMoments();
+  loadGroups();
   loadRooms();
 }
 
@@ -109,10 +116,13 @@ function connectWs() {
     if (type === "message") {
       if (state.selectedFriend && payload.conversationId === conversationId(state.me.id, state.selectedFriend.id)) loadMessages(state.selectedFriend.id);
       else refreshMe();
-      if (state.me?.role === "admin") loadAdminMessages();
     }
     if (type === "message-read" && state.selectedFriend) loadMessages(state.selectedFriend.id);
-    if (type === "message-read" && state.me?.role === "admin") loadAdminMessages();
+    if (type === "groups") loadGroups();
+    if (type === "group-message") {
+      if (state.selectedGroup?.id === payload.groupId) loadGroupMessages(payload.groupId);
+      loadGroups();
+    }
     if (type === "moment") loadMoments();
     if (type === "rooms") state.rooms = payload.rooms, renderRooms();
     if (type === "room-invite") {
@@ -146,20 +156,19 @@ async function refreshMe() {
   $("#meId").textContent = `@${state.me.id}`;
   $("#avatar").textContent = state.me.name.slice(0, 1).toUpperCase();
   $("#rolePill").textContent = "在线";
-  $("#adminAudit").classList.toggle("hidden", state.me.role !== "admin");
-  if (state.me.role === "admin") loadAdminMessages();
   renderFriends();
   renderRequests();
 }
 
 function showView(view) {
-  const titles = { chat: ["聊天", "选择好友开始对话"], friends: ["好友", "检索、申请、删除或拉黑用户"], moments: ["公共空间", "登录用户都能浏览和互动"], games: ["游戏", "好友组队开局，无次数限制"] };
+  const titles = { chat: ["聊天", "选择好友开始对话"], friends: ["好友", "检索、申请、删除或拉黑用户"], groups: ["群聊", "和多个好友一起聊天"], moments: ["公共空间", "登录用户都能浏览和互动"], games: ["游戏", "好友组队开局，无次数限制"] };
   $$(".nav").forEach(b => b.classList.toggle("active", b.dataset.view === view));
   $$(".view").forEach(v => v.classList.add("hidden"));
   $(`#${view}View`).classList.remove("hidden");
   $("#viewTitle").textContent = titles[view][0];
   $("#viewSub").textContent = titles[view][1];
   if (view === "moments") loadMoments();
+  if (view === "groups") loadGroups();
   if (view === "games") loadRooms();
 }
 
@@ -194,26 +203,15 @@ function renderMessages() {
   const box = $("#messages");
   box.innerHTML = state.messages.map(m => {
     const mine = m.from === state.me.id;
-    const read = state.me.role === "admin" ? `<span class="read">${m.readAt ? "已读" : "未读"}</span>` : "";
     return `<div class="msg ${mine ? "mine" : ""}">
       <div class="bubble">
         ${m.text ? `<div>${escapeHtml(m.text)}</div>` : ""}
         ${m.image ? `<img class="chat-img" src="${m.image}" alt="聊天图片">` : ""}
       </div>
-      <div class="meta">${escapeHtml(m.from)} · ${fmt(m.createdAt)} ${read}</div>
+      <div class="meta">${escapeHtml(m.from)} · ${fmt(m.createdAt)}</div>
     </div>`;
   }).join("");
   box.scrollTop = box.scrollHeight;
-}
-
-async function loadAdminMessages() {
-  const { messages } = await api("/api/admin/messages");
-  $("#auditList").innerHTML = messages.map(m => `
-    <div class="audit-row">
-      <strong>${escapeHtml(m.fromUser?.name || m.from)} → ${escapeHtml(m.toUser?.name || m.to)}</strong>
-      <span>${escapeHtml(m.text)}</span>
-      <small>${m.readAt ? `<span class="read">已读</span> ${fmt(m.readAt)}` : "未读"}</small>
-    </div>`).join("") || "<p class='hint'>暂无私聊消息</p>";
 }
 
 async function sendMessage(e) {
@@ -227,6 +225,77 @@ async function sendMessage(e) {
     $("#messageInput").value = "";
     $("#messageImage").value = "";
     await loadMessages(state.selectedFriend.id);
+  } catch (err) { toast(err.message); }
+}
+
+async function loadGroups() {
+  const { groups } = await api("/api/groups");
+  state.groups = groups;
+  renderGroups();
+}
+
+function renderGroups() {
+  $("#groupList").innerHTML = state.groups.map(g => `
+    <button class="friend-item ${state.selectedGroup?.id === g.id ? "active" : ""}" data-group="${g.id}">
+      <span><strong>${escapeHtml(g.name)}</strong><small>${g.members.length} 人</small></span>
+      <span>›</span>
+    </button>`).join("");
+  $$("[data-group]").forEach(btn => btn.onclick = () => selectGroup(btn.dataset.group));
+}
+
+async function createGroup() {
+  const name = $("#groupName").value.trim();
+  const members = state.friends.map(f => f.id);
+  if (!name) return toast("请输入群聊名称");
+  if (!members.length) return toast("先添加好友再建群");
+  try {
+    const { group } = await api("/api/groups", { method: "POST", body: JSON.stringify({ name, members }) });
+    $("#groupName").value = "";
+    state.selectedGroup = group;
+    await loadGroups();
+    await loadGroupMessages(group.id);
+  } catch (err) { toast(err.message); }
+}
+
+async function selectGroup(id) {
+  state.selectedGroup = state.groups.find(g => g.id === id);
+  $("#groupTarget").textContent = state.selectedGroup ? `${state.selectedGroup.name} · ${state.selectedGroup.members.length} 人` : "未选择群聊";
+  renderGroups();
+  await loadGroupMessages(id);
+}
+
+async function loadGroupMessages(id) {
+  const { messages } = await api(`/api/groups/${id}/messages`);
+  state.groupMessages = messages;
+  renderGroupMessages();
+}
+
+function renderGroupMessages() {
+  const box = $("#groupMessages");
+  box.innerHTML = state.groupMessages.map(m => {
+    const mine = m.from === state.me.id;
+    return `<div class="msg ${mine ? "mine" : ""}">
+      <div class="bubble">
+        ${m.text ? `<div>${escapeHtml(m.text)}</div>` : ""}
+        ${m.image ? `<img class="chat-img" src="${m.image}" alt="群聊图片">` : ""}
+      </div>
+      <div class="meta">${escapeHtml(m.from)} · ${fmt(m.createdAt)}</div>
+    </div>`;
+  }).join("");
+  box.scrollTop = box.scrollHeight;
+}
+
+async function sendGroupMessage(e) {
+  e.preventDefault();
+  if (!state.selectedGroup) return toast("请先选择群聊");
+  const text = $("#groupMessageInput").value.trim();
+  const image = await fileToDataUrl($("#groupMessageImage").files[0]);
+  if (!text && !image) return;
+  try {
+    await api(`/api/groups/${state.selectedGroup.id}/messages`, { method: "POST", body: JSON.stringify({ text, image }) });
+    $("#groupMessageInput").value = "";
+    $("#groupMessageImage").value = "";
+    await loadGroupMessages(state.selectedGroup.id);
   } catch (err) { toast(err.message); }
 }
 
@@ -320,13 +389,22 @@ async function loadMoments() {
       <strong>${escapeHtml(m.user?.name || m.userId)}</strong><small>@${m.userId} · ${fmt(m.createdAt)}</small>
       <p>${escapeHtml(m.text)}</p>
       ${m.image ? `<img class="moment-img" src="${m.image}" alt="动态图片">` : ""}
+      ${m.userId === state.me.id && (m.likedBy || []).length ? `<small>点赞：${m.likedBy.map(u => escapeHtml(u.name)).join("、")}</small>` : ""}
       <div class="actions">
         <button data-like-moment="${m.id}">${(m.likes || []).includes(state.me.id) ? "已点赞" : "点赞"} · ${(m.likes || []).length}</button>
         ${m.userId === state.me.id || state.me.role === "admin" ? `<button class="danger" data-delete-moment="${m.id}">删除</button>` : ""}
       </div>
+      <div class="comments">
+        ${(m.comments || []).map(c => `<div><strong>${escapeHtml(c.user?.name || c.userId)}：</strong>${escapeHtml(c.text)}</div>`).join("")}
+      </div>
+      <form class="comment-form" data-comment-form="${m.id}">
+        <input placeholder="写评论" maxlength="300">
+        <button type="submit">评论</button>
+      </form>
     </article>`).join("");
   $$("[data-like-moment]").forEach(b => b.onclick = () => likeMoment(b.dataset.likeMoment));
   $$("[data-delete-moment]").forEach(b => b.onclick = () => deleteMoment(b.dataset.deleteMoment));
+  $$("[data-comment-form]").forEach(form => form.onsubmit = (e) => commentMoment(e, form.dataset.commentForm));
 }
 
 async function likeMoment(id) {
@@ -344,6 +422,18 @@ async function deleteMoment(id) {
   } catch (err) { toast(err.message); }
 }
 
+async function commentMoment(e, id) {
+  e.preventDefault();
+  const input = e.currentTarget.querySelector("input");
+  const text = input.value.trim();
+  if (!text) return;
+  try {
+    await api(`/api/moments/${id}/comments`, { method: "POST", body: JSON.stringify({ text }) });
+    input.value = "";
+    await loadMoments();
+  } catch (err) { toast(err.message); }
+}
+
 async function loadRooms() {
   const { rooms } = await api("/api/rooms");
   state.rooms = rooms;
@@ -354,7 +444,7 @@ function renderRooms() {
   $("#roomList").innerHTML = state.rooms.map(r => `
     <div class="card">
       <strong>${escapeHtml(r.name)}</strong>
-      <small>${r.type === "bombcat" ? "炸弹猫" : "你画我猜"} · ${r.players.length} 人</small>
+      <small>${roomTypeName(r.type)} · ${r.players.length} 人</small>
       <div class="actions">
         <button class="primary" data-join="${r.id}">进入</button>
         ${r.owner === state.me.id || state.me.role === "admin" ? `<button class="danger" data-delete-room="${r.id}">删除</button>` : ""}
@@ -362,6 +452,12 @@ function renderRooms() {
     </div>`).join("");
   $$("[data-join]").forEach(b => b.onclick = () => joinRoom(b.dataset.join));
   $$("[data-delete-room]").forEach(b => b.onclick = () => deleteRoom(b.dataset.deleteRoom));
+}
+
+function roomTypeName(type) {
+  if (type === "bombcat") return "炸弹猫";
+  if (type === "jumpchain") return "跳一跳接龙";
+  return "你画我猜";
 }
 
 async function createRoom() {
@@ -413,6 +509,7 @@ function renderGame() {
     return;
   }
   if (room.type === "drawguess") return renderDrawGuess(room);
+  if (room.type === "jumpchain") return renderJumpChain(room);
   return renderBombCat(room);
 }
 
@@ -447,6 +544,8 @@ function renderDrawGuess(room) {
     <div class="actions">
       <button class="primary" id="startDraw">开始新轮</button>
       <button id="clearCanvas" ${isDrawer ? "" : "disabled"}>清空画布</button>
+      <button id="undoCanvas" ${isDrawer ? "" : "disabled"}>撤回</button>
+      <input class="color-input" id="brushColor" type="color" value="${state.brushColor}" ${isDrawer ? "" : "disabled"}>
     </div>
     <p class="hint">${isDrawer ? `你来画：${escapeHtml(s.word)}` : `作画者：${escapeHtml(room.players.find(p => p.id === s.drawer)?.name || "待开始")}`}</p>
     <div class="canvas-wrap"><canvas id="drawCanvas" width="960" height="540"></canvas></div>
@@ -458,6 +557,8 @@ function renderDrawGuess(room) {
   `;
   $("#startDraw").onclick = () => roomAction({ kind: "start" });
   $("#clearCanvas").onclick = () => roomAction({ kind: "clear" });
+  $("#undoCanvas").onclick = () => roomAction({ kind: "undo" });
+  $("#brushColor").oninput = (e) => state.brushColor = e.target.value;
   $("#guessBtn").onclick = () => roomAction({ kind: "guess", text: $("#guessInput").value });
   bindInviteButtons();
   setupCanvas(room, isDrawer);
@@ -469,7 +570,7 @@ function setupCanvas(room, canDraw) {
   ctx.lineCap = "round";
   ctx.lineJoin = "round";
   ctx.lineWidth = 5;
-  ctx.strokeStyle = "#17202a";
+  ctx.strokeStyle = state.brushColor;
   for (const stroke of room.state.strokes || []) drawStroke(ctx, stroke);
   if (!canDraw) return;
   let current = null;
@@ -483,10 +584,10 @@ function setupCanvas(room, canDraw) {
     if (!current) return;
     e.preventDefault();
     current.push(point(e));
-    drawStroke(ctx, current.slice(-2));
+    drawStroke(ctx, { color: state.brushColor, points: current.slice(-2) });
   };
   const end = () => {
-    if (current?.length > 1) roomAction({ kind: "stroke", stroke: current });
+    if (current?.length > 1) roomAction({ kind: "stroke", stroke: current, color: state.brushColor });
     current = null;
   };
   canvas.onpointerdown = start;
@@ -496,11 +597,36 @@ function setupCanvas(room, canDraw) {
 }
 
 function drawStroke(ctx, stroke) {
-  if (!stroke || stroke.length < 2) return;
+  const points = Array.isArray(stroke) ? stroke : stroke.points;
+  if (!points || points.length < 2) return;
+  ctx.strokeStyle = stroke.color || "#17202a";
   ctx.beginPath();
-  ctx.moveTo(stroke[0].x, stroke[0].y);
-  for (const p of stroke.slice(1)) ctx.lineTo(p.x, p.y);
+  ctx.moveTo(points[0].x, points[0].y);
+  for (const p of points.slice(1)) ctx.lineTo(p.x, p.y);
   ctx.stroke();
+}
+
+function renderJumpChain(room) {
+  const s = room.state;
+  $("#gameStage").innerHTML = `
+    <h3>${escapeHtml(room.name)}</h3>
+    ${playersHtml(room)}
+    ${inviteHtml(room)}
+    <p class="hint">目标距离：${s.target}</p>
+    <div class="jump-board">
+      <div class="jump-target" style="left:${Math.min(92, s.target * 9)}%"></div>
+      ${(s.jumps || []).slice(-12).map(j => `<div class="jump-dot" title="${escapeHtml(j.name)} ${j.score}分" style="left:${Math.min(92, j.value * 9)}%"></div>`).join("")}
+    </div>
+    <div class="composer" style="margin-top:10px">
+      <input id="jumpValue" type="number" min="0" max="10" step="0.1" placeholder="输入 0-10 的落点">
+      <button class="primary" id="jumpBtn">接龙跳</button>
+      <button id="jumpStart">新目标</button>
+    </div>
+    <div class="game-log">${(s.log || []).map(line => `<div>${escapeHtml(line)}</div>`).join("")}</div>
+  `;
+  $("#jumpBtn").onclick = () => roomAction({ kind: "jump", value: $("#jumpValue").value });
+  $("#jumpStart").onclick = () => roomAction({ kind: "start" });
+  bindInviteButtons();
 }
 
 function renderBombCat(room) {

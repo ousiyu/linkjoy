@@ -106,7 +106,7 @@ input:focus, textarea:focus, select:focus { border-color: var(--blue); box-shado
   background: white;
   border-radius: 8px;
 }
-nav { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; padding: 12px; border-bottom: 1px solid var(--line); }
+nav { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; padding: 12px; border-bottom: 1px solid var(--line); }
 .nav { border: 0; background: transparent; padding: 9px 4px; border-radius: 8px; color: #3f4a5f; }
 .nav.active { background: #eaf1ff; color: #174bb8; font-weight: 750; }
 .friend-list { overflow: auto; padding: 10px; }
@@ -234,6 +234,28 @@ h3 { margin: 8px 0 12px; }
 .moments { display: grid; gap: 12px; margin-top: 14px; max-width: 760px; }
 .moment-img { max-width: min(100%, 520px); border-radius: 8px; border: 1px solid var(--line); margin-top: 10px; }
 .chat-img { max-width: min(100%, 360px); border-radius: 8px; border: 1px solid var(--line); margin-top: 8px; display: block; }
+.comments {
+  display: grid;
+  gap: 6px;
+  margin-top: 10px;
+  padding: 10px;
+  border-radius: 8px;
+  background: #f8fafc;
+  border: 1px solid var(--line);
+}
+.comment-form {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px;
+  margin-top: 10px;
+}
+.comment-form button {
+  border: 0;
+  border-radius: 8px;
+  background: #111827;
+  color: white;
+  padding: 0 14px;
+}
 
 .game-stage { min-height: 520px; }
 .players { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0; }
@@ -246,8 +268,43 @@ h3 { margin: 8px 0 12px; }
   margin: 10px 0;
 }
 .invite-panel small { color: var(--muted); }
+.color-input {
+  width: 44px;
+  height: 36px;
+  padding: 2px;
+  border-radius: 8px;
+}
 .canvas-wrap { background: white; border: 1px solid var(--line); border-radius: 8px; padding: 8px; }
 canvas { width: 100%; aspect-ratio: 16 / 9; display: block; background: #fff; border-radius: 6px; touch-action: none; }
+.jump-board {
+  position: relative;
+  height: 86px;
+  margin-top: 12px;
+  border-radius: 8px;
+  background: linear-gradient(90deg, #e8f1ff, #f6fbef);
+  border: 1px solid var(--line);
+  overflow: hidden;
+}
+.jump-board::before {
+  content: "";
+  position: absolute;
+  left: 8%;
+  right: 8%;
+  top: 50%;
+  height: 4px;
+  background: #111827;
+  opacity: .18;
+}
+.jump-target, .jump-dot {
+  position: absolute;
+  top: 50%;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+}
+.jump-target { background: var(--red); box-shadow: 0 0 0 8px rgba(217,45,32,.12); }
+.jump-dot { background: var(--blue); border: 2px solid white; }
 .guess-log, .game-log {
   max-height: 150px;
   overflow: auto;

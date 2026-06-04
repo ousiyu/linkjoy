@@ -50,6 +50,8 @@ function ensureDb() {
       sessions: {},
       friendRequests: [],
       messages: [],
+      groups: [],
+      groupMessages: [],
       moments: [],
       rooms: []
     }, null, 2));
@@ -62,6 +64,10 @@ function loadDb() {
 }
 
 let db = loadDb();
+if (!Array.isArray(db.groups)) db.groups = [];
+if (!Array.isArray(db.groupMessages)) db.groupMessages = [];
+if (!Array.isArray(db.moments)) db.moments = [];
+if (!Array.isArray(db.rooms)) db.rooms = [];
 let saveTimer = null;
 function saveDb() {
   clearTimeout(saveTimer);
@@ -208,19 +214,7 @@ async function handleApi(req, res, url) {
       return json(res, 200, { users });
     }
 
-    if (req.method === "GET" && url.pathname === "/api/admin/messages") {
-      if (me.role !== "admin") return json(res, 404, { error: "接口不存在" });
-      const messages = db.messages
-        .slice()
-        .sort((a, b) => b.createdAt - a.createdAt)
-        .slice(0, 300)
-        .map(m => ({
-          ...m,
-          fromUser: publicUser(db.users.find(u => u.id === m.from)),
-          toUser: publicUser(db.users.find(u => u.id === m.to))
-        }));
-      return json(res, 200, { messages });
-    }
+    if (req.method === "GET" && url.pathname === "/api/admin/messages") return json(res, 404, { error: "接口不存在" });
 
     if (req.method === "POST" && url.pathname === "/api/friends/request") {
       const { to } = await readBody(req);
@@ -299,8 +293,7 @@ async function handleApi(req, res, url) {
       }
       const messages = db.messages.filter(m => m.conversationId === convId).map(m => ({
         ...m,
-        image: m.image || "",
-        readAt: me.role === "admin" ? m.readAt : undefined
+        image: m.image || ""
       }));
       return json(res, 200, { messages });
     }
@@ -322,14 +315,73 @@ async function handleApi(req, res, url) {
       if (!msg.text && !msg.image) return json(res, 400, { error: "消息不能为空" });
       db.messages.push(msg);
       saveDb();
-      broadcastUsers([me.id, target.id, "admin"], "message", msg);
-      return json(res, 201, { message: { ...msg, readAt: me.role === "admin" ? null : undefined } });
+      broadcastUsers([me.id, target.id], "message", msg);
+      return json(res, 201, { message: { ...msg, readAt: undefined } });
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/groups") {
+      const groups = (db.groups || []).filter(g => g.members.includes(me.id)).map(g => ({
+        ...g,
+        members: g.members.map(uid => publicUser(db.users.find(u => u.id === uid))).filter(Boolean)
+      }));
+      return json(res, 200, { groups });
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/groups") {
+      const body = await readBody(req);
+      const memberIds = [...new Set([me.id, ...(body.members || []).map(v => String(v).toLowerCase())])];
+      const validIds = memberIds.filter(uid => uid === me.id || me.friends.includes(uid));
+      const group = {
+        id: id("g_"),
+        name: String(body.name || "新的群聊").trim().slice(0, 30),
+        owner: me.id,
+        members: validIds,
+        createdAt: Date.now()
+      };
+      if (!group.name) return json(res, 400, { error: "群名不能为空" });
+      if (!Array.isArray(db.groups)) db.groups = [];
+      if (!Array.isArray(db.groupMessages)) db.groupMessages = [];
+      db.groups.push(group);
+      saveDb();
+      broadcastUsers(group.members, "groups", { id: group.id });
+      return json(res, 201, { group });
+    }
+
+    if (req.method === "GET" && url.pathname.startsWith("/api/groups/") && url.pathname.endsWith("/messages")) {
+      const groupId = url.pathname.split("/")[3];
+      const group = (db.groups || []).find(g => g.id === groupId && g.members.includes(me.id));
+      if (!group) return json(res, 404, { error: "群聊不存在" });
+      const messages = (db.groupMessages || []).filter(m => m.groupId === groupId);
+      return json(res, 200, { messages });
+    }
+
+    if (req.method === "POST" && url.pathname.startsWith("/api/groups/") && url.pathname.endsWith("/messages")) {
+      const groupId = url.pathname.split("/")[3];
+      const group = (db.groups || []).find(g => g.id === groupId && g.members.includes(me.id));
+      if (!group) return json(res, 404, { error: "群聊不存在" });
+      const body = await readBody(req);
+      const msg = {
+        id: id("gm_"),
+        groupId,
+        from: me.id,
+        text: String(body.text || "").trim().slice(0, 1000),
+        image: String(body.image || "").trim().slice(0, 2_500_000),
+        createdAt: Date.now()
+      };
+      if (!msg.text && !msg.image) return json(res, 400, { error: "消息不能为空" });
+      if (!Array.isArray(db.groupMessages)) db.groupMessages = [];
+      db.groupMessages.push(msg);
+      saveDb();
+      broadcastUsers(group.members, "group-message", msg);
+      return json(res, 201, { message: msg });
     }
 
     if (req.method === "GET" && url.pathname === "/api/moments") {
       const moments = db.moments.sort((a, b) => b.createdAt - a.createdAt).map(m => ({
         ...m,
         likes: Array.isArray(m.likes) ? m.likes : [],
+        likedBy: (Array.isArray(m.likes) ? m.likes : []).map(uid => publicUser(db.users.find(u => u.id === uid))).filter(Boolean),
+        comments: (Array.isArray(m.comments) ? m.comments : []).map(c => ({ ...c, user: publicUser(db.users.find(u => u.id === c.userId)) })),
         user: publicUser(db.users.find(u => u.id === m.userId))
       }));
       return json(res, 200, { moments });
@@ -343,6 +395,7 @@ async function handleApi(req, res, url) {
         text: String(body.text || "").trim().slice(0, 500),
         image: String(body.image || "").trim().slice(0, 1_500_000),
         likes: [],
+        comments: [],
         createdAt: Date.now()
       };
       if (!moment.text && !moment.image) return json(res, 400, { error: "动态内容不能为空" });
@@ -362,6 +415,20 @@ async function handleApi(req, res, url) {
       return json(res, 200, { moment });
     }
 
+    if (req.method === "POST" && url.pathname.startsWith("/api/moments/") && url.pathname.endsWith("/comments")) {
+      const moment = db.moments.find(m => m.id === url.pathname.split("/")[3]);
+      if (!moment) return json(res, 404, { error: "动态不存在" });
+      const body = await readBody(req);
+      const textValue = String(body.text || "").trim().slice(0, 300);
+      if (!textValue) return json(res, 400, { error: "评论不能为空" });
+      if (!Array.isArray(moment.comments)) moment.comments = [];
+      const comment = { id: id("c_"), userId: me.id, text: textValue, createdAt: Date.now() };
+      moment.comments.push(comment);
+      saveDb();
+      broadcastAll("moment", { id: moment.id });
+      return json(res, 201, { comment });
+    }
+
     if (req.method === "DELETE" && url.pathname.startsWith("/api/moments/")) {
       const momentId = url.pathname.split("/").pop();
       const moment = db.moments.find(m => m.id === momentId);
@@ -374,16 +441,16 @@ async function handleApi(req, res, url) {
     }
 
     if (req.method === "GET" && url.pathname === "/api/rooms") {
-      return json(res, 200, { rooms: db.rooms.map(room => safeRoom(room)) });
+      return json(res, 200, { rooms: db.rooms.map(room => safeRoom(room, me.id)) });
     }
 
     if (req.method === "POST" && url.pathname === "/api/rooms") {
       const body = await readBody(req);
-      const type = body.type === "bombcat" ? "bombcat" : "drawguess";
+      const type = ["bombcat", "jumpchain"].includes(body.type) ? body.type : "drawguess";
       const room = {
         id: id("r_"),
         type,
-        name: String(body.name || (type === "bombcat" ? "炸弹猫房间" : "你画我猜房间")).slice(0, 30),
+        name: String(body.name || defaultRoomName(type)).slice(0, 30),
         owner: me.id,
         players: [{ id: me.id, name: me.name, score: 0 }],
         invited: [],
@@ -450,10 +517,26 @@ async function handleApi(req, res, url) {
 
 function initialGameState(type) {
   if (type === "bombcat") return { turn: 0, phase: "waiting", log: ["等待玩家加入"], hands: {}, alive: [], deck: [] };
+  if (type === "jumpchain") return { target: 3, jumps: [], round: 1, log: ["等待玩家接龙"] };
   return { drawer: null, word: "星空", strokes: [], guesses: [], round: 0 };
 }
 
+function defaultRoomName(type) {
+  if (type === "bombcat") return "炸弹猫房间";
+  if (type === "jumpchain") return "跳一跳接龙房间";
+  return "你画我猜房间";
+}
+
 function safeRoom(room, viewerId = null) {
+  if (room.type === "drawguess") {
+    return {
+      ...room,
+      state: {
+        ...room.state,
+        word: room.state.drawer === viewerId ? room.state.word : ""
+      }
+    };
+  }
   if (room.type !== "bombcat") return room;
   const hand = viewerId ? (room.state.hands?.[viewerId] || []) : [];
   return {
@@ -482,10 +565,14 @@ function applyGameAction(room, user, body) {
       room.state.guesses = [];
     }
     if (body.kind === "stroke" && room.state.drawer === user.id) {
-      room.state.strokes.push(body.stroke);
+      room.state.strokes.push({
+        color: String(body.color || "#17202a").slice(0, 20),
+        points: Array.isArray(body.stroke) ? body.stroke : []
+      });
       room.state.strokes = room.state.strokes.slice(-400);
     }
     if (body.kind === "clear" && room.state.drawer === user.id) room.state.strokes = [];
+    if (body.kind === "undo" && room.state.drawer === user.id) room.state.strokes.pop();
     if (body.kind === "guess") {
       const text = String(body.text || "").trim().slice(0, 30);
       if (!text) return;
@@ -495,6 +582,27 @@ function applyGameAction(room, user, body) {
         const player = room.players.find(p => p.id === user.id);
         if (player) player.score += 1;
       }
+    }
+    return;
+  }
+
+  if (room.type === "jumpchain") {
+    if (body.kind === "start") {
+      room.state.round += 1;
+      room.state.target = 2 + Math.floor(Math.random() * 8);
+      room.state.jumps = [];
+      room.state.log = [`新目标：跳到 ${room.state.target}`];
+      return;
+    }
+    if (body.kind === "jump") {
+      const value = Math.max(0, Math.min(10, Number(body.value || 0)));
+      const diff = Math.abs(value - room.state.target);
+      const score = Math.max(0, Math.round((10 - diff) * 10));
+      const player = room.players.find(p => p.id === user.id);
+      if (player) player.score += score;
+      room.state.jumps.push({ userId: user.id, name: user.name, value, score, at: Date.now() });
+      room.state.log.push(`${user.name} 跳到 ${value}，得 ${score} 分`);
+      room.state.log = room.state.log.slice(-20);
     }
     return;
   }
